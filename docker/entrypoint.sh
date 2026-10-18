@@ -4,12 +4,15 @@
 set -u
 
 log() { printf '[sandbox] %s\n' "$*"; }
+# Standardwerte, falls der Container ohne compose.yaml gestartet wird
+AIE_AUTH_URL="${AIE_AUTH_URL:-https://plugins.dev.aie.ai.t-systems.net}"
 READY=/tmp/.sandbox-ready
 rm -f "$READY"
 
 # ---------------------------------------------------------------- Vorlagen
-# config/codex/config.toml -> ~/.codex/config.toml (nur wenn noch keine da ist,
-# oder immer bei SEED_OVERWRITE=1)
+# config/codex/*.toml -> ~/.codex/, config/opencode/opencode.json ->
+# ~/.config/opencode/ (nur wenn noch keine Datei da ist, oder immer bei
+# SEED_OVERWRITE=1)
 seed() {
   local src="$1" dst="$2"
   [ -f "$src" ] || return 0
@@ -20,8 +23,12 @@ seed() {
   fi
 }
 if command -v codex >/dev/null 2>&1; then
-  seed /opt/seed/codex/config.toml "$HOME/.codex/config.toml"
-  seed /opt/seed/codex/AGENTS.md   "$HOME/.codex/AGENTS.md"
+  seed /opt/seed/codex/config.toml      "$HOME/.codex/config.toml"
+  seed /opt/seed/codex/auto.config.toml "$HOME/.codex/auto.config.toml"
+  seed /opt/seed/codex/AGENTS.md        "$HOME/.codex/AGENTS.md"
+fi
+if command -v opencode >/dev/null 2>&1; then
+  seed /opt/seed/opencode/opencode.json "$HOME/.config/opencode/opencode.json"
 fi
 
 # ---------------------------------------------------------------- Git

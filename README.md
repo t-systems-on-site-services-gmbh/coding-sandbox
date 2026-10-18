@@ -25,12 +25,13 @@ Natives Linux funktioniert genauso wie WSL2.
 4. [Codex anmelden](#codex-anmelden)
 5. [opencode einrichten](#opencode-einrichten)
 6. [Täglicher Gebrauch](#täglicher-gebrauch)
-7. [Firmenproxy und Zertifikate](#firmenproxy-und-zertifikate)
-8. [Projekte und Dateien](#projekte-und-dateien)
-9. [Aktualisieren](#aktualisieren)
-10. [Was isoliert ist und was nicht](#was-isoliert-ist-und-was-nicht)
-11. [Fehlersuche](#fehlersuche)
-12. [Aufbau des Repos](#aufbau-des-repos)
+7. [Autonom arbeiten lassen](#autonom-arbeiten-lassen)
+8. [Firmenproxy und Zertifikate](#firmenproxy-und-zertifikate)
+9. [Projekte und Dateien](#projekte-und-dateien)
+10. [Aktualisieren](#aktualisieren)
+11. [Was isoliert ist und was nicht](#was-isoliert-ist-und-was-nicht)
+12. [Fehlersuche](#fehlersuche)
+13. [Aufbau des Repos](#aufbau-des-repos)
 
 ---
 
@@ -169,12 +170,16 @@ im Container kopiert und gehört danach dem Nutzer. Die wichtigsten Punkte:
   **innerhalb** des Containers. Codex' eigene Linux-Sandbox (Landlock/seccomp)
   läuft in unprivilegierten Containern nicht zuverlässig; die Isolation
   übernimmt hier der Container.
-* `approval_policy = "on-request"` – das Modell fragt, wenn es es für nötig
-  hält. Wer jeden Befehl bestätigen will, stellt im TUI per `/approvals` auf
-  strenger.
+* `approval_policy = "on-request"` – das Modell entscheidet selbst, wann es
+  um Erlaubnis bittet, und wartet dann auf dich. Codex 0.163 kennt nur noch
+  diesen Wert und `never` (nie fragen); `never` steckt im Profil `auto` für
+  unbeaufsichtigte Läufe, siehe [Autonom arbeiten lassen](#autonom-arbeiten-lassen).
 * `forced_login_method = "chatgpt"` – Anmeldung über das Abo, nicht per API-Key.
 
-Vorlage nach Änderungen neu einspielen (überschreibt eigene Anpassungen):
+Zum Vergleich: Ganz ohne Konfiguration startet Codex hier mit `read-only` und
+`on-request` – dann scheitert fast jeder schreibende Befehl.
+
+Vorlagen nach Änderungen neu einspielen (überschreibt eigene Anpassungen):
 `./sandbox.sh reseed`.
 
 ---
@@ -198,6 +203,14 @@ Im TUI:
 Die Keys liegen danach im Volume `opencode-data` und überstehen Neustarts und
 Rebuilds. Weitere Provider (auch eigene, etwa ein OpenAI-kompatibler Endpunkt)
 lassen sich jederzeit auf demselben Weg ergänzen.
+
+Berechtigungen: opencode führt Werkzeuge standardmäßig ohne Rückfrage aus.
+Gefragt wird nur bei Zugriffen außerhalb des Projektordners
+(`external_directory`) und wenn sich das Modell offenbar im Kreis dreht
+(`doom_loop`). Die Vorlage `config/opencode/opencode.json` erlaubt
+`external_directory`, weil Werkzeuge im Container oft `/tmp` brauchen. Sie wird
+beim ersten Start nach `~/.config/opencode/opencode.json` kopiert und mit der
+AIE-Konfiguration zusammengeführt.
 
 Hat das automatische Holen der AIE-Konfiguration beim Start nicht geklappt
 (zum Beispiel weil der Proxy noch fehlte):
@@ -236,6 +249,73 @@ Tipp: ein Alias in `~/.zshrc` bzw. `~/.bashrc` spart Tipparbeit:
 
 Der Container läuft im Hintergrund weiter und startet nach einem Neustart von
 Docker automatisch. Mehrere Shells gleichzeitig sind kein Problem.
+
+---
+
+## Autonom arbeiten lassen
+
+Für lange Aufgaben ohne Aufsicht – etwa „setze den Plan in `PLAN.md` um, bis
+alle Tests grün sind“ – startet man einen Lauf im Hintergrund:
+
+```bash
+cd ~/coding-sandbox/workspace/mein-projekt
+../../sandbox.sh auto codex "Setze PLAN.md Schritt für Schritt um. Nach jedem Schritt Tests ausführen und committen. Fertig, wenn alle Tests grün sind."
+../../sandbox.sh auto opencode -f auftrag.md -t 4h
+```
+
+Der Lauf läuft in einer tmux-Sitzung im Container weiter, auch wenn das
+Terminal geschlossen wird. Optionen:
+
+| Option | Bedeutung |
+|---|---|
+| `-f datei` | Auftrag aus einer Datei statt von der Kommandozeile |
+| `-t 4h` | Zeitgrenze (auch `90m`); Standard aus `AUTO_TIMEOUT` in der `.env`, leer = keine |
+| `-m modell` | anderes Modell, bei opencode z. B. `aifs/claude-sonnet-4.6` |
+
+Beobachten und steuern:
+
+```bash
+./sandbox.sh jobs              # alle Läufe: läuft / fertig (Exit-Code) / abgebrochen
+./sandbox.sh log [lauf]        # Protokoll live verfolgen (Strg-C beendet nur das Zuschauen)
+./sandbox.sh attach [lauf]     # in die Sitzung schalten, abkoppeln mit Strg-b, dann d
+./sandbox.sh kill-job <lauf>   # abbrechen
+```
+
+Ohne Angabe nehmen `log` und `attach` den neuesten Lauf. Alles landet im
+Workspace unter `.sandbox-logs/`: der Auftrag (`*.prompt.md`), das Protokoll
+(`*.log`), der Exit-Code (`*.exit`) und bei Codex die letzte Antwort des
+Modells (`*.result.md`). Liegt der Workspace selbst in einem Git-Repository,
+`.sandbox-logs/` dort in die `.gitignore` aufnehmen.
+
+### Was dabei eingestellt wird
+
+**Codex** läuft mit `codex exec` und dem Profil `auto`
+(`~/.codex/auto.config.toml`, Vorlage in `config/codex/`):
+`approval_policy = "never"` und `sandbox_mode = "danger-full-access"`. Codex
+fragt also nie nach; schlägt ein Befehl fehl, bekommt das Modell den Fehler
+zurück und macht selbst weiter. Das Profil lässt sich auch interaktiv nutzen:
+`codex -p auto`.
+
+**opencode** läuft mit `opencode run --auto`. Das genehmigt alles, was sonst
+eine Rückfrage auslösen würde – auch die Schleifenerkennung (`doom_loop`).
+Ausdrückliche Verbote bleiben bestehen: Die AIE-Konfiguration sperrt Web- und
+Codesuche, opencode selbst das Lesen von `.env`-Dateien.
+
+### Damit ein langer Lauf gelingt
+
+* **Im Git-Repository und auf einem eigenen Branch arbeiten.** Dann lässt sich
+  alles prüfen und zurücknehmen. Außerhalb eines Repos warnt `auto`.
+* **Ein klares Ende formulieren.** Das Modell hört auf, wenn es sich fertig
+  glaubt. „Bis alle Tests grün sind“ oder eine Checkliste in einer Plandatei
+  trägt weiter als eine offene Aufgabe.
+* **Eine Zeitgrenze setzen.** Ein Lauf, der sich im Kreis dreht, verbraucht
+  sonst stundenlang Kontingent.
+* **Das ChatGPT-Abo hat Nutzungsfenster.** Ist das Kontingent erschöpft, endet
+  der Codex-Lauf mit Fehler. Fortsetzen in der Sandbox-Shell mit
+  `codex exec -p auto resume --last "Mach weiter"`.
+* **Rechner wach halten.** Schläft der Laptop, pausiert auch Docker; wird
+  Docker beendet oder der Container neu gestartet, enden laufende Läufe.
+  Auf dem Mac hilft `caffeinate -i` in einem zweiten Terminal.
 
 ---
 
@@ -411,7 +491,10 @@ coding-sandbox/
 │   ├── Dockerfile           Debian 13 + Node 24 + Codex und/oder @aie/opencode
 │   ├── entrypoint.sh        Startlogik: Vorlagen, Git, AIE-Konfiguration
 │   └── bashrc.sh            Prompt und Begrüßung
-├── config/codex/config.toml Vorlage für Codex
+├── config/
+│   ├── codex/config.toml      Vorlage für Codex (interaktiv)
+│   ├── codex/auto.config.toml Codex-Profil für unbeaufsichtigte Läufe
+│   └── opencode/opencode.json Vorlage für opencode (Berechtigungen)
 ├── certs/                   Firmenzertifikate (nicht im Git)
 └── workspace/               Standard-Projektordner (nicht im Git)
 ```

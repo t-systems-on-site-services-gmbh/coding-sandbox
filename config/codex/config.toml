@@ -12,8 +12,11 @@ forced_login_method = "chatgpt"
 # deshalb hier volle Rechte *innerhalb* des Containers.
 sandbox_mode = "danger-full-access"
 
-# Rueckfragen: "on-request" laesst das Modell selbst entscheiden, wann es
-# fragt. Wer jeden Befehl bestaetigen will: "untrusted". Im TUI per /approvals.
+# Rueckfragen (Codex 0.163 kennt nur noch diese beiden Werte):
+#   "on-request" - das Modell entscheidet selbst, wann es um Erlaubnis bittet
+#                  (fuer die Arbeit am Bildschirm; der Lauf wartet dann auf dich)
+#   "never"      - nie fragen; fuer unbeaufsichtigte Laeufe, siehe Profil
+#                  auto.config.toml und "./sandbox.sh auto codex ..."
 approval_policy = "on-request"
 
 [shell_environment_policy]

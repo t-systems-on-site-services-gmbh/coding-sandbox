@@ -153,6 +153,13 @@ ${B}Coding-Sandbox${N} - Codex und/oder opencode (AIE) im Container
   ./sandbox.sh login opencode        AIE-Konfiguration neu holen (opencode auth login)
   ./sandbox.sh import-codex-auth [datei]  vorhandene ~/.codex/auth.json uebernehmen
 
+  ./sandbox.sh auto codex|opencode "Auftrag"  unbeaufsichtigter Lauf im Hintergrund
+               Optionen: -f auftrag.md   -t 4h (Zeitgrenze)   -m modell
+  ./sandbox.sh jobs            alle Laeufe mit Status
+  ./sandbox.sh log [lauf]      Protokoll ansehen bzw. live verfolgen
+  ./sandbox.sh attach [lauf]   in die laufende Sitzung schalten (Strg-b d)
+  ./sandbox.sh kill-job <lauf> Lauf abbrechen
+
   ./sandbox.sh status | logs | stop | restart
   ./sandbox.sh doctor          Selbsttest: Docker, Image, Netz, Anmeldungen
   ./sandbox.sh rebuild         Image neu bauen (nach Aenderung an .env/certs)
@@ -296,7 +303,153 @@ cmd_update() {
 
 cmd_reseed() {
   ensure_up
-  $DOCKER exec -e SEED_OVERWRITE=1 "$NAME" sh -c 'cp /opt/seed/codex/config.toml ~/.codex/config.toml && echo "config.toml neu eingespielt"'
+  $DOCKER exec "$NAME" sh -c '
+    copy() { [ -f "$1" ] || return 0; mkdir -p "$(dirname "$2")"; cp "$1" "$2" && echo "neu eingespielt: $2"; }
+    if command -v codex >/dev/null; then
+      copy /opt/seed/codex/config.toml      ~/.codex/config.toml
+      copy /opt/seed/codex/auto.config.toml ~/.codex/auto.config.toml
+      copy /opt/seed/codex/AGENTS.md        ~/.codex/AGENTS.md
+    fi
+    command -v opencode >/dev/null && copy /opt/seed/opencode/opencode.json ~/.config/opencode/opencode.json
+    true'
+}
+
+# ---------------------------------------------------------------- Autonome Laeufe
+# Ein Lauf = eine tmux-Sitzung im Container. Auftrag, Protokoll und Ergebnis
+# liegen unter /work/.sandbox-logs/ (also auch auf dem Host im Workspace).
+LOGDIR=/work/.sandbox-logs
+
+cmd_auto() {
+  local tool="${1:-}"; shift || true
+  case "$tool" in codex|opencode) ;; *) die "Aufruf: ./sandbox.sh auto codex|opencode [optionen] \"Auftrag\"  (siehe ./sandbox.sh help)" ;; esac
+  local file="" tmo model="" prompt
+  tmo="$(envval AUTO_TIMEOUT)"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -f|--file)    [ $# -ge 2 ] || die "-f braucht eine Datei";      file="$2";  shift 2 ;;
+      -t|--timeout) [ $# -ge 2 ] || die "-t braucht eine Dauer (z. B. 4h)"; tmo="$2"; shift 2 ;;
+      -m|--model)   [ $# -ge 2 ] || die "-m braucht einen Modellnamen"; model="$2"; shift 2 ;;
+      --) shift; break ;;
+      -*) die "Unbekannte Option $1" ;;
+      *) break ;;
+    esac
+  done
+  if [ -n "$file" ]; then
+    case "$file" in /*) ;; *) file="$CALLER_PWD/$file" ;; esac
+    [ -f "$file" ] || die "Auftragsdatei $file nicht gefunden."
+    prompt="$(cat "$file")"
+  else
+    prompt="$*"
+  fi
+  [ -n "$prompt" ] || die "Kein Auftrag angegeben (Text oder -f datei)."
+  case "$tmo" in ""|[0-9]*) ;; *) die "Ungueltige Zeitgrenze '$tmo' (z. B. 90m oder 4h)" ;; esac
+  case "$model" in *[!A-Za-z0-9._/:-]*) die "Ungueltiger Modellname '$model'" ;; esac
+
+  ensure_up; need_tool "$tool"
+  local wd id; wd="$(container_wd)"
+  id="$(date +%Y%m%d-%H%M%S)-$tool"
+
+  if [ "$tool" = codex ]; then
+    $DOCKER exec "$NAME" test -f /home/dev/.codex/auto.config.toml \
+      || die "Profil ~/.codex/auto.config.toml fehlt im Container. Abhilfe: ./sandbox.sh reseed"
+    $DOCKER exec "$NAME" codex login status >/dev/null 2>&1 \
+      || die "Codex ist nicht angemeldet: ./sandbox.sh login codex"
+  fi
+
+  local extra=""
+  if ! $DOCKER exec -w "$wd" "$NAME" git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    warn "$wd ist kein Git-Repository - Aenderungen lassen sich dann nicht einfach zuruecknehmen."
+    [ "$tool" = codex ] && extra="--skip-git-repo-check"
+  fi
+
+  # Auftrag als Datei in den Container: kein Quoting-Aerger mit Sonderzeichen
+  printf '%s\n' "$prompt" | $DOCKER exec -i "$NAME" sh -c "mkdir -p $LOGDIR && cat > $LOGDIR/$id.prompt.md" \
+    || die "Konnte den Auftrag nicht ablegen."
+
+  local run
+  if [ "$tool" = codex ]; then
+    run="codex exec -p auto $extra ${model:+-m $model} -o $LOGDIR/$id.result.md - < $LOGDIR/$id.prompt.md"
+  else
+    run="opencode run --auto ${model:+-m $model} --title $id \"\$(cat $LOGDIR/$id.prompt.md)\""
+  fi
+  [ -n "$tmo" ] && run="timeout --signal=INT --kill-after=60 $tmo $run"
+
+  $DOCKER exec -i "$NAME" sh -c "cat > $LOGDIR/$id.run.sh" <<EOS
+#!/usr/bin/env bash
+cd "$wd" || exit 1
+log=$LOGDIR/$id.log
+echo "== Start \$(date '+%F %T') | $tool | $wd | Zeitgrenze: ${tmo:-keine} ==" | tee -a "\$log"
+set -o pipefail
+$run 2>&1 | tee -a "\$log"
+rc=\$?
+echo "\$rc" > $LOGDIR/$id.exit
+echo "== Ende \$(date '+%F %T') | Exit-Code \$rc ==" | tee -a "\$log"
+echo; echo "Lauf beendet. Enter schliesst dieses Fenster, das Protokoll bleibt erhalten."
+read -r _ || sleep infinity
+EOS
+  $DOCKER exec "$NAME" tmux new-session -d -s "$id" -c "$wd" "bash $LOGDIR/$id.run.sh" \
+    || die "Konnte die tmux-Sitzung nicht starten."
+
+  info "Lauf ${B}$id${N} gestartet ($tool in $wd)."
+  cat <<EOF
+  Zuschauen:   ./sandbox.sh log $id      (Strg-C beendet nur das Zuschauen)
+  Eingreifen:  ./sandbox.sh attach $id   (abkoppeln: Strg-b, dann d)
+  Uebersicht:  ./sandbox.sh jobs
+  Abbrechen:   ./sandbox.sh kill-job $id
+  Dateien:     Workspace/.sandbox-logs/$id.*
+EOF
+}
+
+cmd_jobs() {
+  ensure_up
+  $DOCKER exec -e LOGDIR="$LOGDIR" "$NAME" bash -c '
+    ls "$LOGDIR"/*.prompt.md >/dev/null 2>&1 || { echo "Noch keine Laeufe."; exit 0; }
+    printf "%-26s %-13s %s\n" LAUF STATUS AUFTRAG
+    for p in $(ls -1 "$LOGDIR"/*.prompt.md | sort); do
+      id="$(basename "$p" .prompt.md)"
+      if [ -f "$LOGDIR/$id.exit" ]; then st="fertig ($(cat "$LOGDIR/$id.exit"))"
+      elif tmux has-session -t "=$id" 2>/dev/null; then st="laeuft"
+      else st="abgebrochen"; fi
+      printf "%-26s %-13s %s\n" "$id" "$st" "$(head -n1 "$p" | cut -c1-60)"
+    done'
+}
+
+# Ohne Angabe: neuester laufender Lauf, sonst der neueste ueberhaupt
+pick_job() {
+  if [ -n "${1:-}" ]; then echo "$1"; return; fi
+  local id
+  id="$($DOCKER exec "$NAME" sh -c "tmux ls -F '#{session_name}' 2>/dev/null | grep -E '^[0-9]{8}-[0-9]{6}-' | sort | tail -n1")"
+  if [ -z "$id" ]; then
+    id="$($DOCKER exec -e LOGDIR="$LOGDIR" "$NAME" sh -c 'ls -1 "$LOGDIR"/*.prompt.md 2>/dev/null | sort | tail -n1')"
+    id="$(basename "${id:-x}" .prompt.md)"; [ "$id" = x ] && id=""
+  fi
+  [ -n "$id" ] || die "Kein Lauf gefunden. ./sandbox.sh jobs"
+  echo "$id"
+}
+
+cmd_attach() {
+  ensure_up; local id; id="$(pick_job "${1:-}")" || exit 1
+  $DOCKER exec "$NAME" tmux has-session -t "=$id" 2>/dev/null \
+    || die "Lauf $id hat keine offene Sitzung mehr. Protokoll: ./sandbox.sh log $id"
+  info "Verbinde mit $id - abkoppeln mit Strg-b, dann d."
+  $DOCKER exec -it "$NAME" tmux attach -t "=$id"
+}
+
+cmd_log() {
+  ensure_up; local id; id="$(pick_job "${1:-}")" || exit 1
+  $DOCKER exec "$NAME" test -f "$LOGDIR/$id.log" || die "Kein Protokoll fuer $id."
+  if $DOCKER exec "$NAME" test -f "$LOGDIR/$id.exit"; then
+    $DOCKER exec "$NAME" cat "$LOGDIR/$id.log"
+  else
+    info "Protokoll von $id (Strg-C beendet das Zuschauen, nicht den Lauf)"
+    local tty="-i"; [ -t 0 ] && [ -t 1 ] && tty="-it"
+    $DOCKER exec $tty "$NAME" tail -n 80 -f "$LOGDIR/$id.log"
+  fi
+}
+
+cmd_kill_job() {
+  ensure_up; [ -n "${1:-}" ] || die "Aufruf: ./sandbox.sh kill-job <lauf>  (siehe ./sandbox.sh jobs)"
+  $DOCKER exec "$NAME" tmux kill-session -t "=$1" && info "Lauf $1 abgebrochen."
 }
 
 cmd_destroy() {
@@ -328,6 +481,11 @@ case "$sub" in
   rebuild|build)   cmd_rebuild "$@" ;;
   update)          cmd_update ;;
   reseed)          cmd_reseed ;;
+  auto)            cmd_auto "$@" ;;
+  jobs)            cmd_jobs ;;
+  attach)          cmd_attach "$@" ;;
+  log)             cmd_log "$@" ;;
+  kill-job)        cmd_kill_job "$@" ;;
   destroy)         cmd_destroy ;;
   help|-h|--help)  cmd_help ;;
   *)               die "Unbekannter Befehl '$sub'. ./sandbox.sh help" ;;

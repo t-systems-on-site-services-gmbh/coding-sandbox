@@ -1,0 +1,10 @@
+# Codex-Profil "auto" fuer unbeaufsichtigte Laeufe im Container.
+# Wird ueber config.toml gelegt:  codex -p auto   bzw.  codex exec -p auto
+# "./sandbox.sh auto codex ..." verwendet es automatisch.
+# Liegt im Container unter ~/.codex/auto.config.toml und gehoert danach dir.
+
+# Nie nachfragen - Fehlschlaege gehen direkt ans Modell zurueck
+approval_policy = "never"
+
+# Volle Rechte innerhalb des Containers (der Container ist die Grenze)
+sandbox_mode = "danger-full-access"
