@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Coding-Sandbox: Codex (ChatGPT-Abo) und AIE-opencode in einem Container.
+# Coding-Sandbox: Codex (ChatGPT-Abo) und/oder AIE-opencode in einem Container.
 # Build-Kontext ist das Repo-Wurzelverzeichnis (siehe compose.yaml).
 
 ARG NODE_MAJOR=24
@@ -13,6 +13,8 @@ ARG USER_UID=1000
 ARG USER_GID=1000
 ARG ENABLE_SUDO=false
 ARG INSTALL_GH=true
+ARG INSTALL_CODEX=true
+ARG INSTALL_OPENCODE=true
 ARG EXTRA_APT_PACKAGES=""
 ARG CODEX_VERSION=latest
 ARG AIE_OPENCODE_VERSION=latest
@@ -86,24 +88,31 @@ RUN set -eux; \
     chown -R dev:"${GROUP_NAME}" /work /home/dev
 
 # ------------------------------------------------------------------ Agenten
-# Codex (OpenAI) und die AIE-Variante von opencode, global unter /usr/local.
+# Codex (OpenAI) und/oder die AIE-Variante von opencode, global unter
+# /usr/local. Welche, steuern INSTALL_CODEX und INSTALL_OPENCODE.
 RUN set -eux; \
     echo "cache-bust ${CACHE_BUST}"; \
-    npm config set --location=global "@aie:registry" "${AIE_NPM_REGISTRY}"; \
-    # auch als "builtin", damit es mit dem Nutzer-Prefix unten weiter gilt
-    echo "@aie:registry=${AIE_NPM_REGISTRY}" >> "$(npm root -g)/npm/npmrc"; \
-    npm install -g --no-fund --no-audit \
-      "@openai/codex@${CODEX_VERSION}" \
-      "@aie/opencode@${AIE_OPENCODE_VERSION}"; \
-    # @aie/opencode zieht die Binaries aller 12 Plattformen (~2 GB), verlinkt
-    # aber nur eines. Den Rest entfernen.
-    oc="$(npm root -g)/@aie/opencode"; keep="$(readlink -f "$oc/bin/opencode")"; \
-    for d in "$oc"/node_modules/@aie/opencode-*; do \
-      case "$keep" in "$d"/*) ;; *) rm -rf "$d" ;; esac; \
-    done; \
-    npm cache clean --force; \
-    codex --version; \
-    opencode --version
+    if [ "${INSTALL_CODEX}" != "true" ] && [ "${INSTALL_OPENCODE}" != "true" ]; then \
+      echo "INSTALL_CODEX und INSTALL_OPENCODE sind beide aus - mindestens eines einschalten." >&2; exit 1; \
+    fi; \
+    if [ "${INSTALL_CODEX}" = "true" ]; then \
+      npm install -g --no-fund --no-audit "@openai/codex@${CODEX_VERSION}"; \
+      codex --version; \
+    fi; \
+    if [ "${INSTALL_OPENCODE}" = "true" ]; then \
+      npm config set --location=global "@aie:registry" "${AIE_NPM_REGISTRY}"; \
+      # auch als "builtin", damit es mit dem Nutzer-Prefix unten weiter gilt
+      echo "@aie:registry=${AIE_NPM_REGISTRY}" >> "$(npm root -g)/npm/npmrc"; \
+      npm install -g --no-fund --no-audit "@aie/opencode@${AIE_OPENCODE_VERSION}"; \
+      # @aie/opencode zieht die Binaries aller 12 Plattformen (~2 GB),
+      # verlinkt aber nur eines. Den Rest entfernen.
+      oc="$(npm root -g)/@aie/opencode"; keep="$(readlink -f "$oc/bin/opencode")"; \
+      for d in "$oc"/node_modules/@aie/opencode-*; do \
+        case "$keep" in "$d"/*) ;; *) rm -rf "$d" ;; esac; \
+      done; \
+      opencode --version; \
+    fi; \
+    npm cache clean --force
 
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/sandbox-entrypoint
 COPY --chmod=0644 docker/bashrc.sh /etc/profile.d/zz-sandbox.sh

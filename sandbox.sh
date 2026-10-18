@@ -69,6 +69,9 @@ need_engine() {
   command -v "$DOCKER" >/dev/null 2>&1 || die "'$DOCKER' nicht gefunden. Docker installieren (siehe README)."
   [ -n "$COMPOSE" ] || die "Docker Compose fehlt ('docker compose version' schlaegt fehl)."
   $DOCKER info >/dev/null 2>&1 || die "Docker laeuft nicht oder ist nicht erreichbar. Docker Desktop starten bzw. 'sudo service docker start'."
+  if [ "${INSTALL_CODEX:-$(envval INSTALL_CODEX true)}" != "true" ] && [ "${INSTALL_OPENCODE:-$(envval INSTALL_OPENCODE true)}" != "true" ]; then
+    die "INSTALL_CODEX und INSTALL_OPENCODE sind in der .env beide aus - mindestens eines auf true setzen."
+  fi
   # CPU-Grenze nicht hoeher als das, was die Engine hat (Docker Desktop
   # teilt oft nur 2 CPUs zu - sonst bricht der Start ab)
   local want have
@@ -127,10 +130,17 @@ dexec() {
   $DOCKER exec $tty -w "$(container_wd)" -e TERM="${TERM:-xterm-256color}" "$NAME" "$@"
 }
 
+# Ist ein Werkzeug im Image? Sonst mit Hinweis auf den Schalter abbrechen.
+need_tool() { # need_tool codex|opencode
+  $DOCKER exec "$NAME" sh -c "command -v $1" >/dev/null 2>&1 && return 0
+  local sw=INSTALL_CODEX; [ "$1" = opencode ] && sw=INSTALL_OPENCODE
+  die "$1 ist in diesem Image nicht installiert. In der .env $sw=true setzen, dann ./sandbox.sh rebuild."
+}
+
 # ---------------------------------------------------------------- Befehle
 cmd_help() {
   cat <<EOF
-${B}Coding-Sandbox${N} - Codex und opencode (AIE) im Container
+${B}Coding-Sandbox${N} - Codex und/oder opencode (AIE) im Container
 
   ./sandbox.sh                 Sandbox starten und hineinspringen (DEFAULT_ENTRY=$DEFAULT_ENTRY)
   ./sandbox.sh shell           Shell im Container
@@ -153,8 +163,8 @@ EOF
 }
 
 cmd_shell()    { ensure_up; dexec bash -l; }
-cmd_codex()    { ensure_up; dexec codex "$@"; }
-cmd_opencode() { ensure_up; dexec opencode "$@"; }
+cmd_codex()    { ensure_up; need_tool codex; dexec codex "$@"; }
+cmd_opencode() { ensure_up; need_tool opencode; dexec opencode "$@"; }
 cmd_run() {
   [ "${1:-}" = "--" ] && shift
   [ $# -gt 0 ] || die "Aufruf: ./sandbox.sh run <befehl>"
@@ -165,7 +175,7 @@ cmd_login() {
   local what="${1:-}"; shift || true
   case "$what" in
     codex)
-      ensure_up
+      ensure_up; need_tool codex
       if [ "${1:-}" = "--device" ]; then
         info "Geraetecode-Anmeldung. Voraussetzung: in ChatGPT unter Einstellungen > Sicherheit"
         info "\"Geraetecode-Anmeldung erlauben\" (bei Workspace-Konten: Admin) aktiviert."
@@ -189,7 +199,7 @@ cmd_login() {
       return $rc
       ;;
     opencode|aie)
-      ensure_up
+      ensure_up; need_tool opencode
       local url; url="$(envval AIE_AUTH_URL https://plugins.dev.aie.ai.t-systems.net)"
       dexec opencode auth login "$url"
       info "Danach im TUI: ${B}/connect${N} -> Provider waehlen -> API-Key eintragen."
@@ -201,7 +211,7 @@ cmd_login() {
 cmd_import_codex_auth() {
   local src="${1:-$HOME/.codex/auth.json}"
   [ -f "$src" ] || die "Keine Datei $src. (Auf dem Mac liegt das Token evtl. im Schluesselbund - dann ./sandbox.sh login codex.)"
-  ensure_up
+  ensure_up; need_tool codex
   if $DOCKER exec "$NAME" test -s /home/dev/.codex/auth.json; then
     printf 'Im Container gibt es schon eine Anmeldung. Ueberschreiben? [j/N] '
     local a; read -r a; case "$a" in j|J|y|Y) ;; *) echo "Abgebrochen."; return 1 ;; esac
@@ -215,7 +225,10 @@ cmd_status() {
   compose ps
   if running; then
     echo
-    dexec -T sh -c 'printf "codex     %s\nopencode  %s\n" "$(codex --version 2>/dev/null)" "$(opencode --version 2>/dev/null)"'
+    dexec -T sh -c '
+      command -v codex    >/dev/null && printf "codex     %s\n" "$(codex --version)"
+      command -v opencode >/dev/null && printf "opencode  %s\n" "$(opencode --version)"
+      true'
   fi
 }
 
@@ -245,7 +258,10 @@ ok()   { printf '  %sOK%s    %s\n' "$G" "$N" "$*"; }
 warn() { printf '  %sWARN%s  %s\n' "$Y" "$N" "$*"; }
 bad()  { printf '  %sFEHLER%s %s\n' "$R" "$N" "$*"; }
 ok "Nutzer $(id -un) ($(id -u):$(id -g)), node $(node --version)"
-ok "codex $(codex --version 2>/dev/null | awk '{print $NF}'), opencode $(opencode --version 2>/dev/null)"
+HAS_CODEX=0; command -v codex >/dev/null 2>&1 && HAS_CODEX=1
+HAS_OC=0; command -v opencode >/dev/null 2>&1 && HAS_OC=1
+[ $HAS_CODEX = 1 ] && ok "codex $(codex --version 2>/dev/null | awk '{print $NF}')" || ok "codex nicht installiert (INSTALL_CODEX=false)"
+[ $HAS_OC = 1 ] && ok "opencode $(opencode --version 2>/dev/null)" || ok "opencode nicht installiert (INSTALL_OPENCODE=false)"
 if [ -w /work ]; then ok "/work beschreibbar"
 else bad "/work nicht beschreibbar: Workspace gehoert UID $(stat -c %u /work), Container-Nutzer hat $(id -u). Abhilfe: ./sandbox.sh rebuild"; fi
 probe() { # name url
@@ -253,15 +269,19 @@ probe() { # name url
   if [ "$code" != "000" ]; then ok "Netz: $1 erreichbar (HTTP $code)"
   else bad "Netz: $1 nicht erreichbar - $(head -c 160 /tmp/probe.err)"; fi
 }
-probe "chatgpt.com (Codex)" https://chatgpt.com/
-probe "AIE-Plugins" https://plugins.dev.aie.ai.t-systems.net/.well-known/opencode
-probe "LLM Hub" https://llm-server.llmhub.t-systems.net/
-if codex login status >/dev/null 2>&1; then ok "Codex: $(codex login status 2>&1 | head -n1)"
-else warn "Codex nicht angemeldet -> ./sandbox.sh login codex"; fi
-if grep -qs "plugins.dev.aie.ai.t-systems.net" ~/.local/share/opencode/auth.json; then ok "opencode: AIE-Konfiguration eingerichtet"
-else warn "opencode: AIE-Konfiguration fehlt -> ./sandbox.sh login opencode"; fi
-n="$(opencode auth list 2>/dev/null | grep -ciE 'api|oauth' || true)"
-[ "${n:-0}" -gt 0 ] && ok "opencode: Zugangsdaten hinterlegt" || warn "opencode: noch keine Provider-Keys -> im TUI /connect"
+if [ $HAS_CODEX = 1 ]; then
+  probe "chatgpt.com (Codex)" https://chatgpt.com/
+  if codex login status >/dev/null 2>&1; then ok "Codex: $(codex login status 2>&1 | head -n1)"
+  else warn "Codex nicht angemeldet -> ./sandbox.sh login codex"; fi
+fi
+if [ $HAS_OC = 1 ]; then
+  probe "AIE-Plugins" https://plugins.dev.aie.ai.t-systems.net/.well-known/opencode
+  probe "LLM Hub" https://llm-server.llmhub.t-systems.net/
+  if grep -qs "plugins.dev.aie.ai.t-systems.net" ~/.local/share/opencode/auth.json; then ok "opencode: AIE-Konfiguration eingerichtet"
+  else warn "opencode: AIE-Konfiguration fehlt -> ./sandbox.sh login opencode"; fi
+  n="$(opencode auth list 2>/dev/null | grep -ciE 'api|oauth' || true)"
+  [ "${n:-0}" -gt 0 ] && ok "opencode: Zugangsdaten hinterlegt" || warn "opencode: noch keine Provider-Keys -> im TUI /connect"
+fi
 EOS
 }
 

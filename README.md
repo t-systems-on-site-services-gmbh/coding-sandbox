@@ -1,7 +1,8 @@
 # Coding-Sandbox: Codex und opencode im Container
 
 Ein abgeschotteter Docker-Container für KI-gestütztes Programmieren. Darin
-laufen zwei Coding-Agenten:
+laufen zwei Coding-Agenten – beide oder nur einer davon, siehe
+[Nur ein Werkzeug](#nur-ein-werkzeug):
 
 * **Codex** (OpenAI), angemeldet mit dem eigenen ChatGPT-Abo
 * **opencode** in der AIE-Variante (`@aie/opencode`), vorkonfiguriert für
@@ -20,15 +21,16 @@ Natives Linux funktioniert genauso wie WSL2.
 
 1. [Voraussetzungen](#voraussetzungen)
 2. [Schnellstart](#schnellstart)
-3. [Codex anmelden](#codex-anmelden)
-4. [opencode einrichten](#opencode-einrichten)
-5. [Täglicher Gebrauch](#täglicher-gebrauch)
-6. [Firmenproxy und Zertifikate](#firmenproxy-und-zertifikate)
-7. [Projekte und Dateien](#projekte-und-dateien)
-8. [Aktualisieren](#aktualisieren)
-9. [Was isoliert ist und was nicht](#was-isoliert-ist-und-was-nicht)
-10. [Fehlersuche](#fehlersuche)
-11. [Aufbau des Repos](#aufbau-des-repos)
+3. [Nur ein Werkzeug](#nur-ein-werkzeug)
+4. [Codex anmelden](#codex-anmelden)
+5. [opencode einrichten](#opencode-einrichten)
+6. [Täglicher Gebrauch](#täglicher-gebrauch)
+7. [Firmenproxy und Zertifikate](#firmenproxy-und-zertifikate)
+8. [Projekte und Dateien](#projekte-und-dateien)
+9. [Aktualisieren](#aktualisieren)
+10. [Was isoliert ist und was nicht](#was-isoliert-ist-und-was-nicht)
+11. [Fehlersuche](#fehlersuche)
+12. [Aufbau des Repos](#aufbau-des-repos)
 
 ---
 
@@ -92,8 +94,30 @@ Beim ersten Start passiert automatisch:
   hinterlegt.
 * Git-Name und -E-Mail werden vom Host übernommen (oder aus der `.env`).
 
-Danach fehlen nur noch die persönlichen Anmeldungen, siehe die nächsten beiden
-Abschnitte.
+Danach fehlen nur noch die persönlichen Anmeldungen, siehe die nächsten
+Abschnitte. Wer nur eines der Werkzeuge nutzt, braucht auch nur dessen
+Anmeldung.
+
+---
+
+## Nur ein Werkzeug
+
+Standardmäßig kommen beide Agenten ins Image. Wer nur einen braucht, schaltet
+den anderen in der `.env` ab:
+
+```
+INSTALL_CODEX=true
+INSTALL_OPENCODE=false
+```
+
+Danach `./sandbox.sh rebuild`. Das Image wird kleiner, und Begrüßung,
+`status` und `doctor` zeigen nur noch das installierte Werkzeug. Ruft man das
+fehlende trotzdem auf (`./sandbox.sh opencode`), sagt das Skript, welchen
+Schalter man umlegen muss. Mindestens eines der beiden muss an sein.
+
+Ohne Rebuild geht es auch: beide installiert lassen und die Anmeldung des
+ungenutzten Werkzeugs einfach weglassen. Die Werkzeuge hängen nicht
+voneinander ab; `doctor` meldet die fehlende Anmeldung dann nur als Hinweis.
 
 ---
 
@@ -384,7 +408,7 @@ coding-sandbox/
 ├── compose.yaml             Dienst, Mounts, Volumes, Grenzen
 ├── .env.example             Vorlage für die persönliche .env
 ├── docker/
-│   ├── Dockerfile           Debian 13 + Node 24 + Codex + @aie/opencode
+│   ├── Dockerfile           Debian 13 + Node 24 + Codex und/oder @aie/opencode
 │   ├── entrypoint.sh        Startlogik: Vorlagen, Git, AIE-Konfiguration
 │   └── bashrc.sh            Prompt und Begrüßung
 ├── config/codex/config.toml Vorlage für Codex

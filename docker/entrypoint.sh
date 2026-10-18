@@ -19,8 +19,10 @@ seed() {
     log "Vorlage uebernommen: $dst"
   fi
 }
-seed /opt/seed/codex/config.toml "$HOME/.codex/config.toml"
-seed /opt/seed/codex/AGENTS.md   "$HOME/.codex/AGENTS.md"
+if command -v codex >/dev/null 2>&1; then
+  seed /opt/seed/codex/config.toml "$HOME/.codex/config.toml"
+  seed /opt/seed/codex/AGENTS.md   "$HOME/.codex/AGENTS.md"
+fi
 
 # ---------------------------------------------------------------- Git
 if [ -n "${GIT_USER_NAME:-}" ] && [ -z "$(git config --global user.name 2>/dev/null)" ]; then
