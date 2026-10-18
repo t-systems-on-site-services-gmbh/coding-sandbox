@@ -1,0 +1,99 @@
+name: ${SANDBOX_NAME:-coding-sandbox}
+
+services:
+  sandbox:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        TZ: ${TZ:-Europe/Berlin}
+        USER_UID: ${HOST_UID:-1000}
+        USER_GID: ${HOST_GID:-1000}
+        NODE_MAJOR: ${NODE_MAJOR:-24}
+        ENABLE_SUDO: ${ENABLE_SUDO:-false}
+        INSTALL_GH: ${INSTALL_GH:-true}
+        EXTRA_APT_PACKAGES: ${EXTRA_APT_PACKAGES:-}
+        CODEX_VERSION: ${CODEX_VERSION:-latest}
+        AIE_OPENCODE_VERSION: ${AIE_OPENCODE_VERSION:-latest}
+        AIE_NPM_REGISTRY: ${AIE_NPM_REGISTRY:-https://plugins.dev.aie.ai.t-systems.net/v1/npm}
+        CACHE_BUST: ${CACHE_BUST:-0}
+        # Firmenproxy auch beim Bauen (apt, npm)
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+        http_proxy: ${HTTP_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
+        no_proxy: ${NO_PROXY:-}
+    image: ${SANDBOX_IMAGE:-coding-sandbox:local}
+    container_name: ${SANDBOX_NAME:-coding-sandbox}
+    hostname: ${SANDBOX_NAME:-coding-sandbox}
+    init: true
+    # Lokaler Proxy auf dem Host (z. B. px, cntlm) ist im Container unter
+    # host.docker.internal erreichbar - auch mit Docker Engine unter WSL2
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    working_dir: /work
+
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      TERM: xterm-256color
+      COLORTERM: truecolor
+      # Firmenproxy zur Laufzeit
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
+      http_proxy: ${HTTP_PROXY:-}
+      https_proxy: ${HTTPS_PROXY:-}
+      no_proxy: ${NO_PROXY:-}
+      # Git-Identitaet (sandbox.sh uebernimmt sonst die des Hosts)
+      GIT_USER_NAME: ${GIT_USER_NAME:-}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
+      # opencode: AIE-Endpunkt fuer "opencode auth login" beim ersten Start
+      AIE_AUTH_URL: ${AIE_AUTH_URL:-https://plugins.dev.aie.ai.t-systems.net}
+      AIE_AUTO_LOGIN: ${AIE_AUTO_LOGIN:-1}
+      # Die CLIs liegen unter /usr/local und sollen sich nicht selbst ersetzen;
+      # Updates laufen ueber "./sandbox.sh update"
+      OPENCODE_DISABLE_AUTOUPDATE: "1"
+      # Vorlagen aus config/ bei jedem Start ueberschreiben (1) oder nur
+      # anlegen, wenn noch keine eigene Datei da ist (0)
+      SEED_OVERWRITE: ${SEED_OVERWRITE:-0}
+
+    volumes:
+      # Projekte: liegen auf dem Host, im Container unter /work
+      - ${WORKSPACE_DIR:-./workspace}:/work
+      # Vorlagen (Codex-Konfiguration), nur lesend
+      - ./config:/opt/seed:ro
+      # Anmeldedaten und Einstellungen: in Volumes, nicht auf dem Host
+      - codex-home:/home/dev/.codex
+      - opencode-config:/home/dev/.config/opencode
+      - opencode-data:/home/dev/.local/share/opencode
+      - opencode-state:/home/dev/.local/state/opencode
+      - gh-config:/home/dev/.config/gh
+      - npm-global:/home/dev/.npm-global
+      - cache:/home/dev/.cache
+      # Optional: SSH-Keys des Hosts nur lesend (bei Bedarf einkommentieren)
+      # - ${HOME}/.ssh:/home/dev/.ssh:ro
+
+    ports:
+      # Nur fuer "./sandbox.sh login codex": OAuth-Rueckleitung des Browsers
+      # (Codex leitet fest auf localhost:1455 zurueck, daher nicht aendern)
+      - "127.0.0.1:1455:1455"
+      # Eigene Dev-Server bei Bedarf freigeben (nur lokal erreichbar):
+      # - "127.0.0.1:3000:3000"
+      # - "127.0.0.1:5173:5173"
+
+    cpus: ${SANDBOX_CPUS:-4}
+    mem_limit: ${SANDBOX_MEMORY:-8g}
+    pids_limit: 4096
+
+volumes:
+  codex-home:
+  opencode-config:
+  opencode-data:
+  opencode-state:
+  gh-config:
+  npm-global:
+  cache:

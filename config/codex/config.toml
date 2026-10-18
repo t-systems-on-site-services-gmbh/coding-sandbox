@@ -1,0 +1,21 @@
+# Vorlage fuer ~/.codex/config.toml in der Sandbox.
+# Wird beim ersten Start in das Volume kopiert und gehoert danach dem Nutzer.
+# Neu einspielen: ./sandbox.sh reseed  (ueberschreibt eigene Aenderungen!)
+
+# Anmeldung mit dem ChatGPT-Abo. Ein OS-Schluesselbund fehlt im Container,
+# daher landet das Token als Datei im Volume codex-home (~/.codex/auth.json).
+cli_auth_credentials_store = "file"
+forced_login_method = "chatgpt"
+
+# Der Container ist die Isolationsgrenze. Codex' eigene Linux-Sandbox
+# (Landlock/seccomp) laeuft in unprivilegierten Containern nicht zuverlaessig,
+# deshalb hier volle Rechte *innerhalb* des Containers.
+sandbox_mode = "danger-full-access"
+
+# Rueckfragen: "on-request" laesst das Modell selbst entscheiden, wann es
+# fragt. Wer jeden Befehl bestaetigen will: "untrusted". Im TUI per /approvals.
+approval_policy = "on-request"
+
+[shell_environment_policy]
+# Proxy- und Zertifikatsvariablen an die Befehle des Agenten durchreichen
+inherit = "all"

@@ -1,0 +1,7 @@
+.env
+workspace/*
+!workspace/.gitkeep
+certs/*
+!certs/README.md
+.DS_Store
+compose.local.yaml

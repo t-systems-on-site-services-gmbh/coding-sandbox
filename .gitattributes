@@ -1,0 +1,4 @@
+# Container-Dateien muessen LF behalten (auch bei Checkout unter Windows)
+* text=auto eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
